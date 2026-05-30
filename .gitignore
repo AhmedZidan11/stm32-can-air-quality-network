@@ -1,0 +1,27 @@
+# Build outputs
+Debug/
+Release/
+build/
+*.o
+*.d
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+*.su
+
+# STM32CubeMX local-only files
+*.ioc
+.mxproject
+
+# Eclipse / STM32CubeIDE local workspace noise
+.metadata/
+.settings/
+*.launch
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak
