@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+//#include <stddef.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -29,7 +30,7 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-#define MSG_SIZE 100
+#define MSG_SIZE 160
 
 typedef struct {
 	char msg[MSG_SIZE];
@@ -71,6 +72,8 @@ static void MX_CAN1_Init(void);
 /* USER CODE BEGIN PFP */
 void uart2_write_data(uart_msg_t* my_msg, int msg_len);
 void CAN_Filter_Config(void);
+
+static void format_can_frame(char *out, size_t out_size, const can_frame_t *frame);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -151,12 +154,7 @@ int main(void)
 
 	  if (CAN_IF_Read(&can_bus, &rx_msg)) {
 	      if (my_msg.ready_to_send == 1) {
-	          snprintf(my_msg.msg,
-	                   MSG_SIZE,
-	                   "CAN RX id=0x%03lX dlc=%u data0 = %u\r\n",
-	                   (unsigned long)rx_msg.id,
-	                   rx_msg.dlc,
-					   rx_msg.data[0]);
+	          format_can_frame(my_msg.msg, MSG_SIZE, &rx_msg);
 	          my_msg.data_available = 1;
 	      }
 	  }
@@ -340,6 +338,41 @@ void uart2_write_data(uart_msg_t* my_msg, int msg_len)
 		my_msg->counter++;
 		my_msg->ready_to_send = 0;
 	}
+}
+
+static void format_can_frame(char *out, size_t out_size, const can_frame_t *frame)
+{
+    if ((out == NULL) || (frame == NULL) || (out_size == 0U)) {
+        return;
+    }
+
+    uint8_t dlc = frame->dlc;
+
+    if (dlc > CAN_MAX_DLC) {
+        dlc = CAN_MAX_DLC;
+    }
+
+    int written = snprintf(out, out_size, "CAN RX id=0x%03lX dlc=%u data=[", (unsigned long)frame->id, (unsigned int)dlc);
+
+    if ((written < 0) || ((size_t)written >= out_size)) {
+        out[out_size - 1U] = '\0';
+        return;
+    }
+
+    size_t used = (size_t)written;
+
+    for (uint8_t i = 0U; i < dlc; i++) {
+        written = snprintf(&out[used], out_size - used, "%02X%s", (unsigned int)frame->data[i], (i + 1U < dlc) ? " " : "");
+
+        if ((written < 0) || ((size_t)written >= (out_size - used))) {
+            out[out_size - 1U] = '\0';
+            return;
+        }
+
+        used += (size_t)written;
+    }
+
+    snprintf(&out[used], out_size - used, "]\r\n");
 }
 
 void CAN_Filter_Config(void)
