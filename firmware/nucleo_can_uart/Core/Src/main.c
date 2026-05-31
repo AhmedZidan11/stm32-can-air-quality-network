@@ -26,6 +26,7 @@
 #include <string.h>
 #include "can_if.h"
 #include "bxcan_if.h"
+#include "air_quality_can_protocol.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -74,6 +75,7 @@ void uart2_write_data(uart_msg_t* my_msg, int msg_len);
 void CAN_Filter_Config(void);
 
 static void format_can_frame(char *out, size_t out_size, const can_frame_t *frame);
+static void format_air_quality_frame(char *out, size_t out_size, const aq_can_measurement_t *measurement);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -154,7 +156,14 @@ int main(void)
 
 	  if (CAN_IF_Read(&can_bus, &rx_msg)) {
 	      if (my_msg.ready_to_send == 1) {
-	          format_can_frame(my_msg.msg, MSG_SIZE, &rx_msg);
+	          aq_can_measurement_t measurement = {0};
+
+	          if (AQ_CAN_UnpackMeasurementFrame(&rx_msg, &measurement) == CAN_IF_OK) {
+	              format_air_quality_frame(my_msg.msg, MSG_SIZE, &measurement);
+	          } else {
+	              format_can_frame(my_msg.msg, MSG_SIZE, &rx_msg);
+	          }
+
 	          my_msg.data_available = 1;
 	      }
 	  }
@@ -373,6 +382,36 @@ static void format_can_frame(char *out, size_t out_size, const can_frame_t *fram
     }
 
     snprintf(&out[used], out_size - used, "]\r\n");
+}
+
+static void format_air_quality_frame(char *out, size_t out_size, const aq_can_measurement_t *measurement)
+{
+    if ((out == NULL) || (measurement == NULL) || (out_size == 0U))
+    {
+        return;
+    }
+
+    int32_t temp_x100 = (int32_t)measurement->temperature_c_x100;
+    int32_t temp_abs = temp_x100;
+
+    if (temp_abs < 0)
+    {
+        temp_abs = -temp_abs;
+    }
+
+    uint32_t humidity_x100 = (uint32_t)measurement->humidity_rh_x100;
+
+    snprintf(out,
+             out_size,
+             "AQ RX T=%s%ld.%02ld C RH=%lu.%02lu %% VOC=%lu cnt=%u flags=0x%02X\r\n",
+             (temp_x100 < 0) ? "-" : "",
+             (long)(temp_abs / 100),
+             (long)(temp_abs % 100),
+             (unsigned long)(humidity_x100 / 100U),
+             (unsigned long)(humidity_x100 % 100U),
+             (unsigned long)measurement->voc_index,
+             (unsigned int)measurement->sample_counter,
+             (unsigned int)measurement->status_flags);
 }
 
 void CAN_Filter_Config(void)

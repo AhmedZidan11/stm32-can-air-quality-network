@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "air_quality_service.h"
+#include "air_quality_can_protocol.h"
 #include "MCP2515.h"
 #include "can_if.h"
 /* USER CODE END Includes */
@@ -139,10 +140,12 @@ int main(void)
   uint8_t local_error_flags = 0U;
 
   can_frame_t tx_msg = {0};
-  tx_msg.id = APP_CAN_TX_ID;
-  tx_msg.id_type = CAN_ID_STANDARD;
-  tx_msg.frame_type = CAN_FRAME_DATA;
-  tx_msg.dlc = 8U;
+  aq_can_measurement_t test_measurement = {0};
+  test_measurement.temperature_c_x100 = 2345;   /* 23.45 °C */
+  test_measurement.humidity_rh_x100 = 5120;     /* 51.20 %RH */
+  test_measurement.voc_index = 100U;
+  test_measurement.sample_counter = 0U;
+  test_measurement.status_flags = AQ_CAN_MakeStatusFlags(1U, 1U, 1U, 0U);
 
   /* USER CODE END 2 */
 
@@ -169,22 +172,22 @@ int main(void)
 	  {
 	    if (CAN_IF_Is_Busy(&g_can_bus) == 0U)
 	    {
-	      tx_msg.data[0] = local_can_counter;
-	      tx_msg.data[1] = (uint8_t)(local_can_counter + 1U);
-	      tx_msg.data[2] = (uint8_t)(local_can_counter + 2U);
-	      tx_msg.data[3] = (uint8_t)(local_can_counter + 3U);
-	      tx_msg.data[4] = 0xAAU;
-	      tx_msg.data[5] = 0x55U;
-	      tx_msg.data[6] = 0x0FU;
-	      tx_msg.data[7] = 0xF0U;
+	    	test_measurement.sample_counter = local_can_counter;
+	    	test_measurement.voc_index = (uint16_t)(100U + (local_can_counter % 50U));
+	    	test_measurement.status_flags = AQ_CAN_MakeStatusFlags(1U, 1U, 1U, 0U);
 
-	      g_last_can_send_status = CAN_IF_Send(&g_can_bus, &tx_msg);
+	    	g_last_can_send_status = AQ_CAN_PackMeasurementFrame(&test_measurement, &tx_msg);
 
-	      if (g_last_can_send_status == CAN_IF_OK)
-	      {
-	        local_can_counter++;
-	        g_can_tx_counter = local_can_counter;
-	      }
+	    	if (g_last_can_send_status == CAN_IF_OK)
+	    	{
+	    	  g_last_can_send_status = CAN_IF_Send(&g_can_bus, &tx_msg);
+
+	    	  if (g_last_can_send_status == CAN_IF_OK)
+	    	  {
+	    	    local_can_counter++;
+	    	    g_can_tx_counter = local_can_counter;
+	    	  }
+	    	}
 	    }
 
 	    last_can_tx_ms = now_ms;
