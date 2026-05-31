@@ -33,7 +33,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define APP_CAN_TX_ID             0x120U
+#define APP_CAN_TX_PERIOD_MS      1000U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -48,6 +49,18 @@ SPI_HandleTypeDef hspi2;
 static air_quality_service_t g_air_quality;
 static volatile air_quality_status_t g_air_quality_status = AIR_QUALITY_STATUS_NO_UPDATE;
 static volatile uint32_t g_main_loop_counter = 0u;
+
+static can_if_t g_can_bus;
+static can_if_backend_t g_can_backend;
+
+static volatile MCP2515_Status_t g_mcp_init_status = MCP2515_OK;
+static volatile can_if_status_t g_can_if_init_status = CAN_IF_OK;
+static volatile can_if_status_t g_last_can_send_status = CAN_IF_OK;
+
+static volatile uint8_t g_can_tx_counter = 0U;
+static volatile uint8_t g_can_tx_done_count = 0U;
+static volatile uint8_t g_mcp_error_flags = 0U;
+static volatile uint8_t g_mcp_error_count = 0U;
 
 /* USER CODE END PV */
 
@@ -100,6 +113,37 @@ int main(void)
   air_quality_service_init(&g_air_quality, &hi2c1, HAL_GetTick());
   g_air_quality_status = air_quality_service_check_ready(&g_air_quality);
 
+  g_mcp_init_status = MCP2515_Init(&hspi2, MCP2515_CS_GPIO_Port, MCP2515_CS_Pin, MCP2515_MODE_NORMAL);
+
+  if (g_mcp_init_status != MCP2515_OK)
+  {
+    Error_Handler();
+  }
+
+  g_mcp_init_status = MCP2515_Get_CAN_IF_Backend(&g_can_backend);
+
+  if (g_mcp_init_status != MCP2515_OK)
+  {
+    Error_Handler();
+  }
+
+  g_can_if_init_status = CAN_IF_Init(&g_can_bus, &g_can_backend);
+
+  if (g_can_if_init_status != CAN_IF_OK)
+  {
+    Error_Handler();
+  }
+
+  uint32_t last_can_tx_ms = HAL_GetTick();
+  uint8_t local_can_counter = 0U;
+  uint8_t local_error_flags = 0U;
+
+  can_frame_t tx_msg = {0};
+  tx_msg.id = APP_CAN_TX_ID;
+  tx_msg.id_type = CAN_ID_STANDARD;
+  tx_msg.frame_type = CAN_FRAME_DATA;
+  tx_msg.dlc = 8U;
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -117,6 +161,47 @@ int main(void)
 	  {
 	    g_air_quality_status = service_status;
 	  }
+
+	  // Start CAN Transmission
+	  uint32_t now_ms = HAL_GetTick();
+
+	  if ((now_ms - last_can_tx_ms) >= APP_CAN_TX_PERIOD_MS)
+	  {
+	    if (CAN_IF_Is_Busy(&g_can_bus) == 0U)
+	    {
+	      tx_msg.data[0] = local_can_counter;
+	      tx_msg.data[1] = (uint8_t)(local_can_counter + 1U);
+	      tx_msg.data[2] = (uint8_t)(local_can_counter + 2U);
+	      tx_msg.data[3] = (uint8_t)(local_can_counter + 3U);
+	      tx_msg.data[4] = 0xAAU;
+	      tx_msg.data[5] = 0x55U;
+	      tx_msg.data[6] = 0x0FU;
+	      tx_msg.data[7] = 0xF0U;
+
+	      g_last_can_send_status = CAN_IF_Send(&g_can_bus, &tx_msg);
+
+	      if (g_last_can_send_status == CAN_IF_OK)
+	      {
+	        local_can_counter++;
+	        g_can_tx_counter = local_can_counter;
+	      }
+	    }
+
+	    last_can_tx_ms = now_ms;
+	  }
+
+	  if (CAN_IF_Take_Tx_Done(&g_can_bus) != 0U)
+	  {
+	    g_can_tx_done_count++;
+	    HAL_GPIO_TogglePin(USER_LED_GPIO_Port, USER_LED_Pin);
+	  }
+
+	  if (MCP2515_Take_Error_Flags(&local_error_flags) != 0U)
+	  {
+	    g_mcp_error_flags = local_error_flags;
+	    g_mcp_error_count++;
+	  }
+
 	  HAL_Delay(10u);
   }
   /* USER CODE END 3 */
