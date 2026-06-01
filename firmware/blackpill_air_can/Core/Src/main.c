@@ -21,6 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <stdint.h>
 #include "air_quality_service.h"
 #include "air_quality_can_protocol.h"
 #include "MCP2515.h"
@@ -70,6 +71,10 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_SPI2_Init(void);
+static void app_build_air_quality_measurement(aq_can_measurement_t *measurement, const air_quality_service_t *air_quality, uint8_t sample_counter);
+static int16_t app_scale_temperature_c_x100(float temperature_c);
+static uint16_t app_scale_humidity_rh_x100(float humidity_rh);
+static uint16_t app_clamp_voc_index_to_u16(int32_t voc_index);
 /* USER CODE BEGIN PFP */
 /* USER CODE END PFP */
 
@@ -140,12 +145,9 @@ int main(void)
   uint8_t local_error_flags = 0U;
 
   can_frame_t tx_msg = {0};
-  aq_can_measurement_t test_measurement = {0};
-  test_measurement.temperature_c_x100 = 2345;   /* 23.45 °C */
-  test_measurement.humidity_rh_x100 = 5120;     /* 51.20 %RH */
-  test_measurement.voc_index = 100U;
-  test_measurement.sample_counter = 0U;
-  test_measurement.status_flags = AQ_CAN_MakeStatusFlags(1U, 1U, 1U, 0U);
+  aq_can_measurement_t tx_measurement = {0};
+  uint32_t last_sent_voc_process_count = 0U;
+
 
   /* USER CODE END 2 */
 
@@ -172,20 +174,27 @@ int main(void)
 	  {
 	    if (CAN_IF_Is_Busy(&g_can_bus) == 0U)
 	    {
-	    	test_measurement.sample_counter = local_can_counter;
-	    	test_measurement.voc_index = (uint16_t)(100U + (local_can_counter % 50U));
-	    	test_measurement.status_flags = AQ_CAN_MakeStatusFlags(1U, 1U, 1U, 0U);
+	    	uint32_t current_voc_process_count = g_air_quality.voc_process_count;
 
-	    	g_last_can_send_status = AQ_CAN_PackMeasurementFrame(&test_measurement, &tx_msg);
-
-	    	if (g_last_can_send_status == CAN_IF_OK)
+	    	if ((current_voc_process_count > 0U) && (current_voc_process_count != last_sent_voc_process_count))
 	    	{
-	    	  g_last_can_send_status = CAN_IF_Send(&g_can_bus, &tx_msg);
-
-	    	  if (g_last_can_send_status == CAN_IF_OK)
+	    	  if (CAN_IF_Is_Busy(&g_can_bus) == 0U)
 	    	  {
-	    	    local_can_counter++;
-	    	    g_can_tx_counter = local_can_counter;
+	    	    app_build_air_quality_measurement(&tx_measurement, &g_air_quality, local_can_counter);
+
+	    	    g_last_can_send_status = AQ_CAN_PackMeasurementFrame(&tx_measurement, &tx_msg);
+
+	    	    if (g_last_can_send_status == CAN_IF_OK)
+	    	    {
+	    	      g_last_can_send_status = CAN_IF_Send(&g_can_bus, &tx_msg);
+
+	    	      if (g_last_can_send_status == CAN_IF_OK)
+	    	      {
+	    	        last_sent_voc_process_count = current_voc_process_count;
+	    	        local_can_counter++;
+	    	        g_can_tx_counter = local_can_counter;
+	    	      }
+	    	    }
 	    	  }
 	    	}
 	    }
@@ -381,6 +390,84 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+static int16_t app_scale_temperature_c_x100(float temperature_c)
+{
+  float scaled = temperature_c * 100.0f;
+
+  if (scaled >= 0.0f)
+  {
+    scaled += 0.5f;
+  } else
+  {
+    scaled -= 0.5f;
+  }
+
+  if (scaled > 32767.0f)
+  {
+    return INT16_MAX;
+  }
+
+  if (scaled < -32768.0f)
+  {
+    return INT16_MIN;
+  }
+
+  return (int16_t)scaled;
+}
+
+static uint16_t app_scale_humidity_rh_x100(float humidity_rh)
+{
+  float scaled = humidity_rh * 100.0f;
+
+  if (scaled < 0.0f)
+  {
+    return 0U;
+  }
+
+  if (scaled > 10000.0f)
+  {
+    return 10000U;
+  }
+
+  scaled += 0.5f;
+
+  return (uint16_t)scaled;
+}
+
+static uint16_t app_clamp_voc_index_to_u16(int32_t voc_index)
+{
+  if (voc_index < 0)
+  {
+    return 0U;
+  }
+
+  if (voc_index > 65535)
+  {
+    return UINT16_MAX;
+  }
+
+  return (uint16_t)voc_index;
+}
+
+static void app_build_air_quality_measurement(aq_can_measurement_t *measurement, const air_quality_service_t *air_quality, uint8_t sample_counter)
+{
+  if ((measurement == NULL) || (air_quality == NULL))
+  {
+    return;
+  }
+
+  measurement->temperature_c_x100 = app_scale_temperature_c_x100(air_quality->temperature_c);
+
+  measurement->humidity_rh_x100 = app_scale_humidity_rh_x100(air_quality->humidity_rh);
+
+  measurement->voc_index = app_clamp_voc_index_to_u16((int32_t)air_quality->voc_index);
+
+  measurement->sample_counter = sample_counter;
+
+  measurement->status_flags = AQ_CAN_MakeStatusFlags(1U, 1U, 1U, 0U);
+}
+
 void HAL_I2C_MasterTxCpltCallback(I2C_HandleTypeDef *hi2c)
 {
   air_quality_service_on_i2c_tx_complete(&g_air_quality, hi2c);
